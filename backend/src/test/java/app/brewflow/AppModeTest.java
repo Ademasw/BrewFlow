@@ -23,6 +23,10 @@ class AppModeTest {
     static class ModeOnly {
     }
 
+    // same override as IntegrationTest: CI points this at its postgres service
+    private static final String TEST_DB_URL = System.getenv().getOrDefault("BREWFLOW_TEST_DB_URL",
+            "jdbc:postgresql://127.0.0.1:55432/brewflow_test");
+
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withUserConfiguration(ModeOnly.class)
             .withPropertyValues("brewflow.deployment-tier=local");
@@ -75,7 +79,7 @@ class AppModeTest {
         SpringApplication app = new SpringApplication(BrewFlowApplication.class);
         app.setWebApplicationType(WebApplicationType.NONE);
         assertThatThrownBy(() -> app.run("--brewflow.app-mode=",
-                "--spring.datasource.url=jdbc:postgresql://127.0.0.1:55432/brewflow_test"))
+                "--spring.datasource.url=" + TEST_DB_URL))
                 .hasStackTraceContaining("APP_MODE must be exactly TRAINING or LIVE");
     }
 
@@ -85,7 +89,7 @@ class AppModeTest {
         SpringApplication app = new SpringApplication(BrewFlowApplication.class);
         app.setWebApplicationType(WebApplicationType.NONE);
         try (var ctx = app.run("--brewflow.app-mode=TRAINING",
-                "--spring.datasource.url=jdbc:postgresql://127.0.0.1:55432/brewflow_test")) {
+                "--spring.datasource.url=" + TEST_DB_URL)) {
             assertThat(ctx.getBean(app.brewflow.bootstrap.BootstrapAdminCommand.class)).isNotNull();
         }
     }
@@ -95,7 +99,7 @@ class AppModeTest {
         SpringApplication app = new SpringApplication(BrewFlowApplication.class);
         app.setWebApplicationType(WebApplicationType.NONE);
         assertThatThrownBy(() -> app.run("--brewflow.app-mode=LIVE", "--brewflow.fiscal-sop-approved=false",
-                "--spring.datasource.url=jdbc:postgresql://127.0.0.1:55432/brewflow_test"))
+                "--spring.datasource.url=" + TEST_DB_URL))
                 .hasStackTraceContaining("FISCAL_SOP_APPROVED=true");
     }
 }
