@@ -1,0 +1,79 @@
+spring:
+  application:
+    name: brewflow
+  datasource:
+    url: ${BREWFLOW_DB_URL:jdbc:postgresql://127.0.0.1:55432/brewflow}
+    username: ${BREWFLOW_DB_USER:postgres}
+    password: ${BREWFLOW_DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: 20
+  flyway:
+    locations: classpath:db/migration
+  threads:
+    virtual:
+      enabled: false
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: false
+  main:
+    banner-mode: off
+
+server:
+  port: ${PORT:8080}
+  servlet:
+    session:
+      timeout: 15m
+      tracking-modes: cookie
+      cookie:
+        name: BFSESSION
+        http-only: true
+        secure: ${COOKIE_SECURE:true}
+        same-site: lax
+        path: /
+  error:
+    include-message: never
+    include-stacktrace: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+
+springdoc:
+  api-docs:
+    enabled: ${SWAGGER_ENABLED:true}
+  swagger-ui:
+    enabled: ${SWAGGER_ENABLED:true}
+    path: /swagger-ui.html
+    operations-sorter: method
+    tags-sorter: alpha
+    display-request-duration: true
+  paths-to-match: /api/v1/**
+  default-produces-media-type: application/json
+
+brewflow:
+  # Section 3. APP_MODE has no default: a missing or misspelled value stops startup.
+  app-mode: ${APP_MODE:}
+  fiscal-sop-approved: ${FISCAL_SOP_APPROVED:}
+  fiscal-sop-id: ${FISCAL_SOP_ID:}
+  deployment-tier: ${DEPLOYMENT_TIER:local}
+  # Candidates until DEC-07 and DEC-08.
+  currency: KGS
+  timezone: Asia/Bishkek
+  quote-ttl: PT10M
+  login:
+    max-failed-attempts: 5
+    ip-max-failures: 30
+    ip-window: PT10M
+  kds:
+    heartbeat: PT25S
+
+logging:
+  pattern:
+    correlation: "[req=%X{requestId:-} actor=%X{actorId:-}] "

@@ -1,0 +1,21 @@
+# local PostgreSQL 18 cluster and bootstrap files
+.local/
+
+# backend
+backend/target/
+
+# web
+web/node_modules/
+web/.next/
+web/next-env.d.ts
+web/*.tsbuildinfo
+
+# editors and OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# local tool config
+.claude/

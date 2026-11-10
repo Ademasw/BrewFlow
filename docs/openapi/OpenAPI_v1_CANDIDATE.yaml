@@ -1,0 +1,2046 @@
+openapi: 3.1.0
+info:
+  title: BrewFlow API
+  description: |
+    BrewFlow pilot API (CANDIDATE, not owner-approved). Same-origin JSON under `/api/v1`, server-side session
+    cookie `BFSESSION`, CSRF header on every mutation.
+
+    **Try it out in this page**
+    1. `GET /api/v1/auth/csrf` → copy `token`, press **Authorize** and paste it into `csrf` (header `X-CSRF-TOKEN`).
+    2. `POST /api/v1/auth/login` → the session rotates and the response carries a new `csrf.token`:
+       paste it into **Authorize → csrf** again. The browser keeps the session cookie by itself.
+    3. While `mustChangeCredential` is true, every route except csrf, me, credential and logout returns
+       `403 CREDENTIAL_CHANGE_REQUIRED`.
+
+    `POST /api/v1/orders` needs header `Idempotency-Key` (UUID). Money is a string with two decimals.
+    Errors use one envelope: `{"error":{"code","message","requestId","details"}}`.
+  version: 0.3.2-draft
+servers:
+- url: http://127.0.0.1:8080
+  description: Generated server url
+security:
+- session: []
+  csrf: []
+tags:
+- name: Kitchen (KDS)
+  description: "Open tickets, prep transitions and the SSE hint stream"
+- name: Menu
+  description: Catalog for the POS and admin menu management (ADR-011)
+- name: Auth
+  description: "Session, CSRF and own credential"
+- name: "Admin: quote recovery"
+  description: Orphan-receipt recovery (section 4.4)
+- name: "Admin: shifts and reports"
+  description: Shifts and the section 5 internal report
+- name: "Admin: staff"
+  description: Staff accounts (section 2.1)
+- name: "Admin: voids"
+  description: Full-order VOID_NOTE corrections (section 4.6)
+- name: "Admin: orders"
+  description: Orders of one business date for the admin screens
+- name: "Admin: audit"
+  description: "Append-only, redacted audit trail"
+- name: Orders
+  description: "Quotes, idempotent submit and order reads (section 4)"
+paths:
+  /api/v1/admin/menu/items/{id}/modifier-groups:
+    put:
+      tags:
+      - Menu
+      summary: Replace the item's modifier groups; 409 MENU_CHANGED
+      operationId: replaceItemGroups
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ItemGroupsRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Catalog"
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/orders:
+    post:
+      tags:
+      - Orders
+      summary: Record an order from a quote (Idempotency-Key required)
+      operationId: submit
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        description: "UUID kept by the POS across timeout, refresh and retry"
+        required: true
+        schema:
+          type: string
+        example: 3f1c2a9e-5b7d-4e21-9c0a-8d6f4b2e1a37
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitBody"
+        required: true
+      responses:
+        "201":
+          description: Order created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "200":
+          description: "Same key and same body: the original order"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/orders/quotes:
+    post:
+      tags:
+      - Orders
+      summary: "Price a cart on the server: 201 quote with quoteRef, valid 10 minutes"
+      operationId: quote
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuoteRequest"
+        required: true
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Quote"
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/auth/logout:
+    post:
+      tags:
+      - Auth
+      summary: "Sign out: the session and its KDS streams end"
+      operationId: logout
+      responses:
+        "204":
+          description: No Content
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/auth/login:
+    post:
+      tags:
+      - Auth
+      summary: "Sign in: rotates the session and returns a new CSRF token; 401 or\
+        \ 429"
+      operationId: login
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/auth/credential:
+    post:
+      tags:
+      - Auth
+      summary: Change own PIN or password; clears mustChangeCredential and rotates
+        the session
+      operationId: changeCredential
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CredentialChangeRequest"
+        required: true
+      responses:
+        "204":
+          description: No Content
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/staff:
+    get:
+      tags:
+      - "Admin: staff"
+      summary: List staff without credential hashes
+      operationId: list
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: {}
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+    post:
+      tags:
+      - "Admin: staff"
+      summary: Create staff with a temporary credential (must change at first login)
+      operationId: create
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRequest"
+        required: true
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/staff/{id}/credential-reset:
+    post:
+      tags:
+      - "Admin: staff"
+      summary: "Temporary credential, unlock, end sessions (audited)"
+      operationId: reset
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResetRequest"
+        required: true
+      responses:
+        "204":
+          description: No Content
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/shifts/{shiftId}/close:
+    post:
+      tags:
+      - "Admin: shifts and reports"
+      summary: Close once with counted cash; returns totals and signed variance
+      operationId: close
+      parameters:
+      - name: shiftId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CloseBody"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Closed"
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/shifts/open:
+    post:
+      tags:
+      - "Admin: shifts and reports"
+      summary: Open a shift; 409 if one is already open
+      operationId: open
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Shift"
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/quotes/{quoteId}/recover:
+    post:
+      tags:
+      - "Admin: quote recovery"
+      summary: "Recover from the frozen quote: 201 EXCEPTION order, 200 if consumed,\
+        \ 409 AMOUNT_MISMATCH"
+      operationId: recover
+      parameters:
+      - name: quoteId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecoverBody"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/quotes/exceptions/{exceptionId}/resolve-outside:
+    post:
+      tags:
+      - "Admin: quote recovery"
+      summary: Close a pending amount-mismatch exception without an order
+      operationId: resolveOutside
+      parameters:
+      - name: exceptionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "204":
+          description: No Content
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/orders/{id}/corrections:
+    post:
+      tags:
+      - "Admin: voids"
+      summary: "Append a VOID_NOTE: PENDING, CONFIRMED (optionally confirming a pending\
+        \ note) or NOT_APPLICABLE"
+      operationId: append
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CorrectionBody"
+        required: true
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/menu/modifier-options:
+    post:
+      tags:
+      - Menu
+      summary: Create an option; priceDelta >= 0
+      operationId: createOption
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OptionCreateRequest"
+        required: true
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: string
+                  format: uuid
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/menu/modifier-groups:
+    post:
+      tags:
+      - Menu
+      summary: Create a modifier group; 0 <= min <= max
+      operationId: createGroup
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GroupCreateRequest"
+        required: true
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: string
+                  format: uuid
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/menu/items:
+    post:
+      tags:
+      - Menu
+      summary: Create an item; basePrice >= 0
+      operationId: createItem
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ItemCreateRequest"
+        required: true
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: string
+                  format: uuid
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/menu/categories:
+    post:
+      tags:
+      - Menu
+      summary: Create a category
+      operationId: createCategory
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CategoryCreateRequest"
+        required: true
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: string
+                  format: uuid
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/orders/{id}/prep-status:
+    patch:
+      tags:
+      - Kitchen (KDS)
+      summary: Prep transition with expectedVersion (section 4.5); never CANCELLED
+      operationId: prepStatus
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PrepStatusRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Kitchen"
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/staff/{id}:
+    patch:
+      tags:
+      - "Admin: staff"
+      summary: "Edit display name, role, active; 409 VERSION_CONFLICT or LAST_ACTIVE_ADMIN"
+      operationId: update
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/menu/modifier-options/{id}:
+    patch:
+      tags:
+      - Menu
+      summary: "Edit title, delta, active"
+      operationId: patchOption
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OptionPatchRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Catalog"
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/menu/modifier-groups/{id}:
+    patch:
+      tags:
+      - Menu
+      summary: "Edit title, min, max, active"
+      operationId: patchGroup
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GroupPatchRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Catalog"
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/menu/items/{id}:
+    patch:
+      tags:
+      - Menu
+      summary: "Edit price, title, availability, category; 409 MENU_CHANGED"
+      operationId: patchItem
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ItemPatchRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Catalog"
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/menu/categories/{id}:
+    patch:
+      tags:
+      - Menu
+      summary: Edit a category; 409 MENU_CHANGED on stale revision
+      operationId: patchCategory
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CategoryPatchRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Catalog"
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/orders/{id}:
+    get:
+      tags:
+      - Orders
+      summary: "Full order with lines, payment and corrections (creator or admin)"
+      operationId: get
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/orders/{id}/kitchen:
+    get:
+      tags:
+      - Orders
+      summary: "Kitchen projection without tender fields (barista, admin)"
+      operationId: kitchen
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Kitchen"
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/orders/by-key/{key}:
+    get:
+      tags:
+      - Orders
+      summary: Recover an order by Idempotency-Key after a lost response
+      operationId: byKey
+      parameters:
+      - name: key
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/menu:
+    get:
+      tags:
+      - Menu
+      summary: "Active catalog and revision (cashier, admin)"
+      operationId: activeMenu
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Catalog"
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/kds/stream:
+    get:
+      tags:
+      - Kitchen (KDS)
+      summary: "SSE stream: event ticket.changed after commit, heartbeat ~25 s"
+      operationId: stream
+      responses:
+        "200":
+          description: OK
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/SseEmitter"
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/kds/open-tickets:
+    get:
+      tags:
+      - Kitchen (KDS)
+      summary: "Snapshot of NEW, PREPARING and READY tickets"
+      operationId: openTickets
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenTickets"
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/auth/me:
+    get:
+      tags:
+      - Auth
+      summary: "Current identity, role, mustChangeCredential, appMode"
+      operationId: me
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/auth/csrf:
+    get:
+      tags:
+      - Auth
+      summary: CSRF header name and token (starts a session if needed)
+      operationId: csrf
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: string
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/shifts:
+    get:
+      tags:
+      - "Admin: shifts and reports"
+      summary: Recent shifts
+      operationId: recent
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Shift"
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/reports/daily:
+    get:
+      tags:
+      - "Admin: shifts and reports"
+      summary: "Section 5 totals for a business date, or for one shift with shiftId"
+      operationId: daily
+      parameters:
+      - name: businessDate
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date
+      - name: shiftId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Report"
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/quotes:
+    get:
+      tags:
+      - "Admin: quote recovery"
+      summary: Expired quotes with no order for a business date (status=EXPIRED_UNCONSUMED)
+      operationId: expired
+      parameters:
+      - name: status
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: businessDate
+        in: query
+        required: true
+        schema:
+          type: string
+          format: date
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: {}
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/orders:
+    get:
+      tags:
+      - "Admin: orders"
+      summary: "Orders of a business date, newest first, with their void state"
+      operationId: list_1
+      parameters:
+      - name: businessDate
+        in: query
+        required: true
+        schema:
+          type: string
+          format: date
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OrderSummary"
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/menu:
+    get:
+      tags:
+      - Menu
+      summary: Full catalog including inactive rows (admin)
+      operationId: adminMenu
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Catalog"
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/v1/admin/audit:
+    get:
+      tags:
+      - "Admin: audit"
+      summary: "Audit events, newest first; page with before and limit"
+      operationId: page
+      parameters:
+      - name: before
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 50
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+        "4XX":
+          description: "Error envelope (section 7): 401, 403, 404, 409, 422, 429"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "5XX":
+          description: "Error envelope: 500 INTERNAL_ERROR, 503 TEMPORARILY_UNAVAILABLE"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+components:
+  schemas:
+    ItemGroupsRequest:
+      type: object
+      properties:
+        groupIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          maxItems: 20
+          minItems: 0
+        expectedRevision:
+          type: integer
+          format: int32
+      required:
+      - expectedRevision
+      - groupIds
+    Catalog:
+      type: object
+      properties:
+        revision:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        categories:
+          type: array
+          items:
+            $ref: "#/components/schemas/Category"
+        modifierGroups:
+          type: array
+          items:
+            $ref: "#/components/schemas/Group"
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        sortOrder:
+          type: integer
+          format: int32
+        active:
+          type: boolean
+        revision:
+          type: integer
+          format: int32
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Item"
+    Group:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        minSelected:
+          type: integer
+          format: int32
+        maxSelected:
+          type: integer
+          format: int32
+        active:
+          type: boolean
+        revision:
+          type: integer
+          format: int32
+        options:
+          type: array
+          items:
+            $ref: "#/components/schemas/Option"
+    Item:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        categoryId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        basePrice:
+          type: string
+        available:
+          type: boolean
+        lowStockFlag:
+          type: boolean
+        active:
+          type: boolean
+        revision:
+          type: integer
+          format: int32
+        modifierGroups:
+          type: array
+          items:
+            $ref: "#/components/schemas/Group"
+    Option:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        groupId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        priceDelta:
+          type: string
+        active:
+          type: boolean
+        revision:
+          type: integer
+          format: int32
+    Correction:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+        externalActionState:
+          type: string
+        confirmsCorrectionId:
+          type: string
+          format: uuid
+        reason:
+          type: string
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+    Line:
+      type: object
+      properties:
+        lineNo:
+          type: integer
+          format: int32
+        menuItemId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        quantity:
+          type: integer
+          format: int32
+        unitBasePrice:
+          type: string
+        unitPrice:
+          type: string
+        lineTotal:
+          type: string
+        modifiers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Modifier"
+    Modifier:
+      type: object
+      properties:
+        optionId:
+          type: string
+          format: uuid
+        groupTitle:
+          type: string
+        title:
+          type: string
+        priceDelta:
+          type: string
+    Order:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        humanNo:
+          type: integer
+          format: int32
+        quoteId:
+          type: string
+          format: uuid
+        quoteRef:
+          type: string
+        cashierId:
+          type: string
+          format: uuid
+        createdBy:
+          type: string
+          format: uuid
+        shiftId:
+          type: string
+          format: uuid
+        businessDate:
+          type: string
+          format: date
+        recordStatus:
+          type: string
+        prepStatus:
+          type: string
+        version:
+          type: integer
+          format: int32
+        total:
+          type: string
+        currency:
+          type: string
+        placedAt:
+          type: string
+          format: date-time
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/Line"
+        payment:
+          $ref: "#/components/schemas/Payment"
+        corrections:
+          type: array
+          items:
+            $ref: "#/components/schemas/Correction"
+    Payment:
+      type: object
+      properties:
+        method:
+          type: string
+        amount:
+          type: string
+        externalReference:
+          type: string
+        attestedBy:
+          type: string
+          format: uuid
+        recordedAt:
+          type: string
+          format: date-time
+        verification:
+          type: string
+    SubmitBody:
+      type: object
+      properties:
+        quoteId:
+          type: string
+          format: uuid
+        paymentMethod:
+          type: string
+        externalReference:
+          type: string
+        confirmedExternalAction:
+          type: boolean
+    LineRequest:
+      type: object
+      properties:
+        menuItemId:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+          format: int32
+        optionIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+    QuoteRequest:
+      type: object
+      properties:
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/LineRequest"
+          maxItems: 50
+          minItems: 1
+      required:
+      - lines
+    Quote:
+      type: object
+      properties:
+        quoteId:
+          type: string
+          format: uuid
+        quoteRef:
+          type: string
+        currency:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/Line"
+        total:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        note:
+          type: string
+    LoginRequest:
+      type: object
+      properties:
+        login:
+          type: string
+          maxLength: 64
+          minLength: 0
+        credential:
+          type: string
+          maxLength: 128
+          minLength: 0
+      required:
+      - credential
+      - login
+    CredentialChangeRequest:
+      type: object
+      properties:
+        currentCredential:
+          type: string
+          maxLength: 128
+          minLength: 0
+        newCredential:
+          type: string
+          maxLength: 128
+          minLength: 0
+      required:
+      - currentCredential
+      - newCredential
+    CreateRequest:
+      type: object
+      properties:
+        login:
+          type: string
+          maxLength: 64
+          minLength: 0
+        displayName:
+          type: string
+          maxLength: 120
+          minLength: 0
+        role:
+          type: string
+          enum:
+          - CASHIER
+          - BARISTA
+          - ADMIN
+        temporaryCredential:
+          type: string
+          maxLength: 128
+          minLength: 0
+      required:
+      - displayName
+      - login
+      - role
+      - temporaryCredential
+    ResetRequest:
+      type: object
+      properties:
+        temporaryCredential:
+          type: string
+          maxLength: 128
+          minLength: 0
+      required:
+      - temporaryCredential
+    CloseBody:
+      type: object
+      properties:
+        countedCash:
+          type: number
+    Closed:
+      type: object
+      properties:
+        shift:
+          $ref: "#/components/schemas/Shift"
+        report:
+          $ref: "#/components/schemas/Report"
+    Report:
+      type: object
+      properties:
+        businessDate:
+          type: string
+          format: date
+        shiftId:
+          type: string
+          format: uuid
+        currency:
+          type: string
+        cashTotal:
+          type: string
+        externalCardTotal:
+          type: string
+        externalQrTotal:
+          type: string
+        recordedTenderTotal:
+          type: string
+        pendingExternalCorrections:
+          type: integer
+          format: int64
+        countedCash:
+          type: string
+        variance:
+          type: string
+        orderCount:
+          type: integer
+          format: int64
+        trainingOrderCount:
+          type: integer
+          format: int64
+        exceptionOrderCount:
+          type: integer
+          format: int64
+        topItems:
+          type: array
+          items:
+            $ref: "#/components/schemas/TopItem"
+        label:
+          type: string
+    Shift:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        businessDate:
+          type: string
+          format: date
+        status:
+          type: string
+        openedBy:
+          type: string
+          format: uuid
+        openedAt:
+          type: string
+          format: date-time
+        closedBy:
+          type: string
+          format: uuid
+        closedAt:
+          type: string
+          format: date-time
+        countedCash:
+          type: string
+    TopItem:
+      type: object
+      properties:
+        menuItemId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        quantity:
+          type: integer
+          format: int64
+    RecoverBody:
+      type: object
+      properties:
+        attestedAmount:
+          type: string
+        paymentMethod:
+          type: string
+        externalReference:
+          type: string
+        reason:
+          type: string
+        idempotencyKey:
+          type: string
+          format: uuid
+    CorrectionBody:
+      type: object
+      properties:
+        type:
+          type: string
+        externalActionState:
+          type: string
+        confirmsCorrectionId:
+          type: string
+          format: uuid
+        reason:
+          type: string
+    OptionCreateRequest:
+      type: object
+      properties:
+        groupId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        priceDelta:
+          type: number
+      required:
+      - groupId
+      - priceDelta
+      - title
+    GroupCreateRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        minSelected:
+          type: integer
+          format: int32
+        maxSelected:
+          type: integer
+          format: int32
+      required:
+      - maxSelected
+      - minSelected
+      - title
+    ItemCreateRequest:
+      type: object
+      properties:
+        categoryId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        basePrice:
+          type: number
+        available:
+          type: boolean
+        lowStockFlag:
+          type: boolean
+      required:
+      - basePrice
+      - categoryId
+      - title
+    CategoryCreateRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          maxLength: 120
+          minLength: 0
+        sortOrder:
+          type: integer
+          format: int32
+      required:
+      - title
+    PrepStatusRequest:
+      type: object
+      properties:
+        prepStatus:
+          type: string
+        expectedVersion:
+          type: integer
+          format: int32
+    Kitchen:
+      type: object
+      properties:
+        orderId:
+          type: string
+          format: uuid
+        humanNo:
+          type: integer
+          format: int32
+        prepStatus:
+          type: string
+        version:
+          type: integer
+          format: int32
+        placedAt:
+          type: string
+          format: date-time
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/KitchenLine"
+    KitchenLine:
+      type: object
+      properties:
+        lineNo:
+          type: integer
+          format: int32
+        title:
+          type: string
+        quantity:
+          type: integer
+          format: int32
+        modifiers:
+          type: array
+          items:
+            $ref: "#/components/schemas/KitchenModifier"
+    KitchenModifier:
+      type: object
+      properties:
+        groupTitle:
+          type: string
+        title:
+          type: string
+    PatchRequest:
+      type: object
+      properties:
+        displayName:
+          type: string
+          maxLength: 120
+          minLength: 1
+        role:
+          type: string
+          enum:
+          - CASHIER
+          - BARISTA
+          - ADMIN
+        active:
+          type: boolean
+        expectedRevision:
+          type: integer
+          format: int32
+      required:
+      - expectedRevision
+    OptionPatchRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        priceDelta:
+          type: number
+        active:
+          type: boolean
+        expectedRevision:
+          type: integer
+          format: int32
+      required:
+      - expectedRevision
+    GroupPatchRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        minSelected:
+          type: integer
+          format: int32
+        maxSelected:
+          type: integer
+          format: int32
+        active:
+          type: boolean
+        expectedRevision:
+          type: integer
+          format: int32
+      required:
+      - expectedRevision
+    ItemPatchRequest:
+      type: object
+      properties:
+        categoryId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        basePrice:
+          type: number
+        available:
+          type: boolean
+        lowStockFlag:
+          type: boolean
+        active:
+          type: boolean
+        expectedRevision:
+          type: integer
+          format: int32
+      required:
+      - expectedRevision
+    CategoryPatchRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        sortOrder:
+          type: integer
+          format: int32
+        active:
+          type: boolean
+        expectedRevision:
+          type: integer
+          format: int32
+      required:
+      - expectedRevision
+    SseEmitter:
+      type: object
+      properties:
+        timeout:
+          type: integer
+          format: int64
+    OpenTickets:
+      type: object
+      properties:
+        snapshotAt:
+          type: string
+          format: date-time
+        tickets:
+          type: array
+          items:
+            $ref: "#/components/schemas/Kitchen"
+    OrderSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        humanNo:
+          type: integer
+          format: int32
+        placedAt:
+          type: string
+          format: date-time
+        recordStatus:
+          type: string
+        prepStatus:
+          type: string
+        total:
+          type: string
+        paymentMethod:
+          type: string
+        cashierName:
+          type: string
+        voidState:
+          type: string
+    ErrorEnvelope:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: QUOTE_EXPIRED
+            message:
+              type: string
+              example: The quote expired. Do not repeat the fiscal action. Ask a manager
+                to recover this quote.
+            requestId:
+              type: string
+            details:
+              type: object
+  securitySchemes:
+    session:
+      type: apiKey
+      description: Set by POST /auth/login; the browser sends it automatically.
+      name: BFSESSION
+      in: cookie
+    csrf:
+      type: apiKey
+      description: "Token from GET /auth/csrf, and again from the login response."
+      name: X-CSRF-TOKEN
+      in: header
