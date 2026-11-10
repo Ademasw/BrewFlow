@@ -1,5 +1,5 @@
 # BF-S1-01: lint, test, build and secret scan on every pull request. A breaking PR fails CI.
-# Not run yet: this repository has no GitHub remote. Locally the same commands pass (see docs/EVIDENCE.md).
+# Locally the same commands pass (see docs/EVIDENCE.md).
 name: ci
 
 on:
@@ -48,6 +48,8 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npm run lint
+      # route types (LayoutProps) are generated, not committed
+      - run: npx next typegen
       - run: npx tsc --noEmit
       - run: npm run build
 

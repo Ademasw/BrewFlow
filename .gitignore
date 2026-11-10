@@ -19,3 +19,6 @@ Thumbs.db
 
 # local tool config
 .claude/
+
+# local demo credentials (see scripts/demo.env.example)
+scripts/demo.env
